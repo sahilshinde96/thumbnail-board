@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Content Creator Thumbnail Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <h2 class="logo">Thumbnail Boards</h2>
+        <button id="sidebarTrigger" class="sidebar-trigger" aria-label="Toggle sidebar">
+          ☰
+        </button>
+      </div>
+      <div id="boardsList" class="boards-list"></div>
+      <div class="add-board">
+        <input id="newBoardInput" type="text" placeholder="New board name" />
+        <button id="addBoardBtn">Add</button>
+      </div>
+    </aside>
+
+    <!-- Overlay for mobile -->
+    <div id="overlay" class="overlay"></div>
+
+    <!-- Main content -->
+    <main class="main">
+      <h1 id="currentBoardTitle" class="board-title">Thumbnail Board</h1>
+      <div class="form">
+        <input id="urlInput" type="text" placeholder="YouTube URL" />
+        <input id="titleInput" type="text" placeholder="Video Title" />
+        <button id="addThumbnailBtn">Add Thumbnail</button>
+      </div>
+      <div id="stats" class="stats hidden">
+        <p id="statsText"></p>
+      </div>
+      <div id="emptyState" class="empty-state hidden">
+        <p>No thumbnails yet. Add one!</p>
+      </div>
+      <div id="thumbnailsGrid" class="thumbnails-grid hidden"></div>
+    </main>
+  </div>
+
+  <script>
+    class ThumbnailBoardApp {
+        constructor() {
+            this.boards = [];
+            this.currentBoardId = null;
+            this.editingBoardId = null;
+            this.sidebarVisible = window.innerWidth > 768;
+
+            this.initElements();
+            this.initEventListeners();
+            this.loadBoards();
+            this.updateSidebarVisibility();
+        }
+
+        initElements() {
+            this.sidebar = document.getElementById('sidebar');
+            this.overlay = document.getElementById('overlay');
+            this.sidebarTrigger = document.getElementById('sidebarTrigger');
+            this.boardsList = document.getElementById('boardsList');
+            this.newBoardInput = document.getElementById('newBoardInput');
+            this.addBoardBtn = document.getElementById('addBoardBtn');
+            this.currentBoardTitle = document.getElementById('currentBoardTitle');
+            this.urlInput = document.getElementById('urlInput');
+            this.titleInput = document.getElementById('titleInput');
+            this.addThumbnailBtn = document.getElementById('addThumbnailBtn');
+            this.thumbnailsGrid = document.getElementById('thumbnailsGrid');
+            this.emptyState = document.getElementById('emptyState');
+            this.stats = document.getElementById('stats');
+            this.statsText = document.getElementById('statsText');
+        }
+
+        initEventListeners() {
+            this.sidebarTrigger.addEventListener('click', () => this.toggleSidebar());
+            this.overlay.addEventListener('click', () => this.hideSidebar());
+            this.addBoardBtn.addEventListener('click', () => this.addBoard());
+            this.newBoardInput.addEventListener('keypress', (e) => this.handleBoardKeyPress(e));
+            this.addThumbnailBtn.addEventListener('click', () => this.addThumbnail());
+            this.urlInput.addEventListener('keypress', (e) => this.handleThumbnailKeyPress(e));
+            this.titleInput.addEventListener('keypress', (e) => this.handleThumbnailKeyPress(e));
+            window.addEventListener('resize', () => {
+                this.sidebarVisible = window.innerWidth > 768;
+                this.updateSidebarVisibility();
+            });
+        }
+
+        // ---------------- API ----------------
+        async loadBoards() {
+            const res = await fetch("/api/boards");
+            this.boards = await res.json();
+            if (this.boards.length > 0) {
+                this.currentBoardId = this.boards[0].id;
+            }
+            this.render();
+        }
+
+        async addBoard() {
+            const name = this.newBoardInput.value.trim();
+            if (!name) return;
+            const res = await fetch("/api/boards", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name })
+            });
+            const newBoard = await res.json();
+            this.boards.push({ ...newBoard, thumbnails: [] });
+            this.currentBoardId = newBoard.id;
+            this.newBoardInput.value = "";
+            this.render();
+        }
+
+        async deleteBoard(boardId) {
+            await fetch(`/api/boards/${boardId}`, { method: "DELETE" });
+            this.boards = this.boards.filter(b => b.id !== boardId);
+            this.currentBoardId = this.boards.length ? this.boards[0].id : null;
+            this.render();
+        }
+
+        async saveEditingBoard(boardId, newName) {
+            if (newName.trim()) {
+                await fetch(`/api/boards/${boardId}`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: newName.trim() })
+                });
+                this.boards = this.boards.map(b => b.id === boardId ? { ...b, name: newName.trim() } : b);
+            }
+            this.editingBoardId = null;
+            this.render();
+        }
+
+        async addThumbnail() {
+            const url = this.urlInput.value.trim();
+            const title = this.titleInput.value.trim();
+            if (!url || !this.currentBoardId) return;
+
+            const res = await fetch(`/api/boards/${this.currentBoardId}/thumbnails`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url, title })
+            });
+            const newThumb = await res.json();
+
+            this.boards = this.boards.map(b =>
+                b.id === this.currentBoardId
+                    ? { ...b, thumbnails: [...b.thumbnails, newThumb] }
+                    : b
+            );
+            this.urlInput.value = "";
+            this.titleInput.value = "";
+            this.render();
+        }
+
+        async removeThumbnail(thumbnailId) {
+            await fetch(`/api/thumbnails/${thumbnailId}`, { method: "DELETE" });
+            this.boards = this.boards.map(b =>
+                b.id === this.currentBoardId
+                    ? { ...b, thumbnails: b.thumbnails.filter(t => t.id !== thumbnailId) }
+                    : b
+            );
+            this.render();
+        }
+
+        // ---------------- UI ----------------
+        updateSidebarVisibility() {
+            if (window.innerWidth > 768) {
+                this.sidebar.classList.remove('sidebar-hidden');
+                this.overlay.classList.remove('show');
+            } else if (!this.sidebarVisible) {
+                this.sidebar.classList.add('sidebar-hidden');
+                this.overlay.classList.remove('show');
+            }
+        }
+
+        toggleSidebar() {
+            this.sidebarVisible = !this.sidebarVisible;
+            if (this.sidebarVisible) this.showSidebar();
+            else this.hideSidebar();
+        }
+
+        showSidebar() {
+            this.sidebar.classList.remove('sidebar-hidden');
+            if (window.innerWidth <= 768) this.overlay.classList.add('show');
+            this.sidebarVisible = true;
+        }
+
+        hideSidebar() {
+            if (window.innerWidth <= 768) {
+                this.sidebar.classList.add('sidebar-hidden');
+                this.overlay.classList.remove('show');
+                this.sidebarVisible = false;
+            }
+        }
+
+        getCurrentBoard() {
+            return this.boards.find(b => b.id === this.currentBoardId);
+        }
+
+        switchBoard(boardId) {
+            this.currentBoardId = boardId;
+            this.render();
+            if (window.innerWidth <= 768) this.hideSidebar();
+        }
+
+        startEditingBoard(boardId, boardName) {
+            this.editingBoardId = boardId;
+            this.renderBoards();
+            setTimeout(() => {
+                const input = document.querySelector(`[data-board-edit="${boardId}"]`);
+                if (input) {
+                    input.focus();
+                    input.select();
+                }
+            }, 0);
+        }
+
+        cancelEditingBoard() {
+            this.editingBoardId = null;
+            this.renderBoards();
+        }
+
+        handleBoardKeyPress(e) {
+            if (e.key === 'Enter') this.addBoard();
+        }
+
+        handleThumbnailKeyPress(e) {
+            if (e.key === 'Enter') this.addThumbnail();
+        }
+
+        handleEditKeyPress(e, boardId) {
+            if (e.key === 'Enter') this.saveEditingBoard(boardId, e.target.value);
+            else if (e.key === 'Escape') this.cancelEditingBoard();
+        }
+
+        createBoardHTML(board) {
+            if (this.editingBoardId === board.id) {
+                return `
+                    <div class="board-item">
+                        <input 
+                            type="text" 
+                            class="board-edit-input"
+                            data-board-edit="${board.id}"
+                            value="${this.escapeHtml(board.name)}"
+                            onkeydown="app.handleEditKeyPress(event, '${board.id}')"
+                            onblur="app.saveEditingBoard('${board.id}', this.value)"
+                        >
+                    </div>`;
+            }
+            return `
+                <div class="board-item">
+                    <button class="board-button ${this.currentBoardId === board.id ? 'active' : ''}" 
+                            onclick="app.switchBoard(${board.id})">
+                        <div class="board-info">
+                            <span class="board-name">${this.escapeHtml(board.name)}</span>
+                            <span class="board-count">(${board.thumbnails.length})</span>
+                        </div>
+                        <div class="board-actions">
+                            <button class="board-action-btn" onclick="event.stopPropagation(); app.startEditingBoard(${board.id}, '${this.escapeHtml(board.name)}')">✎</button>
+                            ${this.boards.length > 1 ? `
+                                <button class="board-action-btn delete" onclick="event.stopPropagation(); app.deleteBoard(${board.id})">🗑</button>` : ''}
+                        </div>
+                    </button>
+                </div>`;
+        }
+
+        createThumbnailHTML(thumbnail) {
+            return `
+                <div class="thumbnail-card">
+                    <div class="thumbnail-inner">
+                        <div class="image-container">
+                            <img src="${thumbnail.url}" alt="${this.escapeHtml(thumbnail.title || 'Thumbnail')}" class="thumbnail-image">
+                            <button class="remove-btn" onclick="app.removeThumbnail(${thumbnail.id})" aria-label="Remove thumbnail">×</button>
+                        </div>
+                        <div class="title-container">
+                            <p class="title-text">${this.escapeHtml(thumbnail.title)}</p>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        renderBoards() {
+            this.boardsList.innerHTML = this.boards.map(b => this.createBoardHTML(b)).join('');
+        }
+
+        renderThumbnails() {
+            const currentBoard = this.getCurrentBoard();
+            if (!currentBoard || currentBoard.thumbnails.length === 0) {
+                this.emptyState.classList.remove('hidden');
+                this.thumbnailsGrid.classList.add('hidden');
+            } else {
+                this.emptyState.classList.add('hidden');
+                this.thumbnailsGrid.classList.remove('hidden');
+                this.thumbnailsGrid.innerHTML = currentBoard.thumbnails.map(t => this.createThumbnailHTML(t)).join('');
+            }
+        }
+
+        updateStats() {
+            const currentBoard = this.getCurrentBoard();
+            if (currentBoard && currentBoard.thumbnails.length > 0) {
+                const count = currentBoard.thumbnails.length;
+                this.stats.classList.remove('hidden');
+                this.statsText.textContent = `${count} thumbnail${count !== 1 ? 's' : ''} in ${currentBoard.name}`;
+            } else {
+                this.stats.classList.add('hidden');
+            }
+        }
+
+        updateTitle() {
+            const currentBoard = this.getCurrentBoard();
+            this.currentBoardTitle.textContent = currentBoard ? currentBoard.name : "Thumbnail Board";
+        }
+
+        render() {
+            this.renderBoards();
+            this.renderThumbnails();
+            this.updateStats();
+            this.updateTitle();
+        }
+    }
+
+    const app = new ThumbnailBoardApp();
+  </script>
+</body>
+</html>
