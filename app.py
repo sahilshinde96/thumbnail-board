@@ -14,6 +14,10 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
 
+# Create tables if they don't exist
+with app.app_context():
+    db.create_all()
+
 # ---------------- Helper ----------------
 def extract_youtube_id(url: str):
     """Extract YouTube video ID and return maxres thumbnail URL"""
@@ -86,6 +90,4 @@ def delete_thumbnail(thumb_id):
 
 # ---------------- Run App ----------------
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
     app.run(debug=True)
